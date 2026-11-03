@@ -1,4 +1,4 @@
-# This repository contents all experiments which are present in sem 6 for reference purpose.
+# This repository contents all experiments which are present in sem 7 for reference purpose.
 
 For any changes msg me personally with source code and output image.
 
