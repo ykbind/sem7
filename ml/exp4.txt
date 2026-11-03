@@ -1,0 +1,32 @@
+# Gradient Descent Algorithm
+# Function: y = (x + 3)^2
+
+def function(x):
+    return (x + 3) ** 2
+
+def derivative(x):
+    return 2 * (x + 3)
+
+# Starting point
+x = 2
+
+# Learning rate
+learning_rate = 0.1
+
+# Number of iterations
+iterations = 100
+
+print("Gradient Descent")
+print("----------------")
+
+for i in range(iterations):
+    gradient = derivative(x)
+
+    # Gradient Descent formula
+    x = x - learning_rate * gradient
+
+    print(f"Iteration {i + 1}: x = {x:.6f}, y = {function(x):.6f}")
+
+print("\nLocal Minimum:")
+print(f"x = {x:.6f}")
+print(f"y = {function(x):.6f}")

@@ -1,0 +1,216 @@
+import os
+import time
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    confusion_matrix, classification_report, roc_curve, auc
+)
+
+# 1. LOAD DATA
+DATA_PATH = "emails.csv"   # change this if your file is elsewhere
+
+if not os.path.exists(DATA_PATH):
+    raise FileNotFoundError(
+        f"'{DATA_PATH}' not found. Download it from Kaggle "
+        "(see instructions in the file header) and place it next to this script, "
+        "or update DATA_PATH."
+    )
+
+df = pd.read_csv(DATA_PATH)
+print("Dataset shape:", df.shape)
+print(df.head())
+
+# ----------------------------------------------------------------------
+# 2. PREPROCESSING
+# ----------------------------------------------------------------------
+# Drop the identifier column if present
+if "Email No." in df.columns:
+    df = df.drop(columns=["Email No."])
+
+# Separate features (X) and target (y)
+# The last column is the label: 1 = Spam (Abnormal), 0 = Not Spam (Normal)
+target_col = "Prediction" if "Prediction" in df.columns else df.columns[-1]
+
+X = df.drop(columns=[target_col])
+y = df[target_col]
+
+print("\nClass distribution (0 = Not Spam, 1 = Spam):")
+print(y.value_counts())
+
+# Check for missing values
+print("\nMissing values total:", X.isnull().sum().sum())
+X = X.fillna(0)
+
+# Train-test split (stratified to preserve class ratio)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+
+# Feature scaling (important for KNN and SVM, both distance/margin based)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+print(f"\nTrain size: {X_train.shape[0]}, Test size: {X_test.shape[0]}")
+
+# ----------------------------------------------------------------------
+# 3. HELPER FUNCTION TO EVALUATE A MODEL
+# ----------------------------------------------------------------------
+def evaluate_model(name, model, X_te, y_te, y_pred, train_time):
+    acc = accuracy_score(y_te, y_pred)
+    prec = precision_score(y_te, y_pred)
+    rec = recall_score(y_te, y_pred)
+    f1 = f1_score(y_te, y_pred)
+    cm = confusion_matrix(y_te, y_pred)
+
+    print(f"\n===== {name} =====")
+    print(f"Training time      : {train_time:.4f} sec")
+    print(f"Accuracy           : {acc:.4f}")
+    print(f"Precision          : {prec:.4f}")
+    print(f"Recall             : {rec:.4f}")
+    print(f"F1-score           : {f1:.4f}")
+    print("Confusion Matrix:\n", cm)
+    print("\nClassification Report:\n", classification_report(y_te, y_pred, target_names=["Not Spam", "Spam"]))
+
+    return {
+        "Model": name,
+        "Accuracy": acc,
+        "Precision": prec,
+        "Recall": rec,
+        "F1-score": f1,
+        "TrainTime(s)": train_time,
+        "ConfusionMatrix": cm
+    }
+
+results = []
+
+# ----------------------------------------------------------------------
+# 4. K-NEAREST NEIGHBORS (KNN)
+# ----------------------------------------------------------------------
+# Find a good k using cross-validation
+print("\nSearching best k for KNN...")
+k_range = range(1, 21)
+cv_scores = []
+for k in k_range:
+    knn_temp = KNeighborsClassifier(n_neighbors=k)
+    scores = cross_val_score(knn_temp, X_train_scaled, y_train, cv=5, scoring="accuracy")
+    cv_scores.append(scores.mean())
+
+best_k = list(k_range)[np.argmax(cv_scores)]
+print(f"Best k found: {best_k} (CV accuracy = {max(cv_scores):.4f})")
+
+plt.figure(figsize=(7, 4))
+plt.plot(list(k_range), cv_scores, marker="o")
+plt.xlabel("k (n_neighbors)")
+plt.ylabel("Cross-validated Accuracy")
+plt.title("KNN: Accuracy vs k")
+plt.axvline(best_k, color="red", linestyle="--", label=f"best k={best_k}")
+plt.legend()
+plt.tight_layout()
+plt.savefig("knn_k_selection.png")
+plt.close()
+
+knn_model = KNeighborsClassifier(n_neighbors=best_k)
+start = time.time()
+knn_model.fit(X_train_scaled, y_train)
+knn_train_time = time.time() - start
+
+y_pred_knn = knn_model.predict(X_test_scaled)
+results.append(evaluate_model("KNN", knn_model, X_test_scaled, y_test, y_pred_knn, knn_train_time))
+
+# ----------------------------------------------------------------------
+# 5. SUPPORT VECTOR MACHINE (SVM)
+# ----------------------------------------------------------------------
+# Small grid search for kernel/C (kept small to run in reasonable time on
+# high-dimensional bag-of-words data; expand if you have more compute/time)
+print("\nSearching best hyperparameters for SVM...")
+param_grid = {
+    "C": [0.1, 1, 10],
+    "kernel": ["linear", "rbf"],
+}
+svm_grid = GridSearchCV(SVC(), param_grid, cv=3, scoring="accuracy", n_jobs=-1)
+svm_grid.fit(X_train_scaled, y_train)
+
+print("Best SVM params:", svm_grid.best_params_)
+print(f"Best CV accuracy : {svm_grid.best_score_:.4f}")
+
+svm_model = svm_grid.best_estimator_
+start = time.time()
+svm_model.fit(X_train_scaled, y_train)   # refit (already fit inside GridSearchCV, kept for clean timing)
+svm_train_time = time.time() - start
+
+y_pred_svm = svm_model.predict(X_test_scaled)
+results.append(evaluate_model("SVM", svm_model, X_test_scaled, y_test, y_pred_svm, svm_train_time))
+
+# ----------------------------------------------------------------------
+# 6. COMPARE PERFORMANCE
+# ----------------------------------------------------------------------
+results_df = pd.DataFrame(results)[["Model", "Accuracy", "Precision", "Recall", "F1-score", "TrainTime(s)"]]
+print("\n================ MODEL COMPARISON ================")
+print(results_df.to_string(index=False))
+results_df.to_csv("model_comparison.csv", index=False)
+
+# Bar chart comparison
+metrics = ["Accuracy", "Precision", "Recall", "F1-score"]
+x = np.arange(len(metrics))
+width = 0.35
+
+plt.figure(figsize=(8, 5))
+plt.bar(x - width/2, results_df.loc[results_df.Model == "KNN", metrics].values.flatten(), width, label="KNN")
+plt.bar(x + width/2, results_df.loc[results_df.Model == "SVM", metrics].values.flatten(), width, label="SVM")
+plt.xticks(x, metrics)
+plt.ylim(0, 1)
+plt.ylabel("Score")
+plt.title("KNN vs SVM Performance Comparison")
+plt.legend()
+plt.tight_layout()
+plt.savefig("model_comparison.png")
+plt.close()
+
+# Confusion matrix heatmaps
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+for ax, res in zip(axes, results):
+    sns.heatmap(res["ConfusionMatrix"], annot=True, fmt="d", cmap="Blues",
+                xticklabels=["Not Spam", "Spam"], yticklabels=["Not Spam", "Spam"], ax=ax)
+    ax.set_title(f"{res['Model']} Confusion Matrix")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+plt.tight_layout()
+plt.savefig("confusion_matrices.png")
+plt.close()
+
+# ROC Curves (need decision_function/predict_proba)
+plt.figure(figsize=(6, 5))
+
+# KNN ROC (via predict_proba)
+knn_probs = knn_model.predict_proba(X_test_scaled)[:, 1]
+fpr_knn, tpr_knn, _ = roc_curve(y_test, knn_probs)
+plt.plot(fpr_knn, tpr_knn, label=f"KNN (AUC = {auc(fpr_knn, tpr_knn):.3f})")
+
+# SVM ROC (via decision_function)
+svm_scores = svm_model.decision_function(X_test_scaled)
+fpr_svm, tpr_svm, _ = roc_curve(y_test, svm_scores)
+plt.plot(fpr_svm, tpr_svm, label=f"SVM (AUC = {auc(fpr_svm, tpr_svm):.3f})")
+
+plt.plot([0, 1], [0, 1], "k--", label="Random guess")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC Curve: KNN vs SVM")
+plt.legend()
+plt.tight_layout()
+plt.savefig("roc_curves.png")
+plt.close()
+
+print("\nSaved plots: knn_k_selection.png, model_comparison.png, "
+      "confusion_matrices.png, roc_curves.png")
+print("Saved comparison table: model_comparison.csv")
+print("\nDone.")
+
